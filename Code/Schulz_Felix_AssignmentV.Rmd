@@ -31,9 +31,9 @@ The required packages are imported:
 # Core packages
 library(httr)
 library(jsonlite)
-library(rlist)
 # Additional packages
 library(tidyverse)
+library(data.table)
 ```
 
 We also set up lists to contain API responses.
@@ -78,9 +78,137 @@ venue_data =
   # Retrieve the nested coordinates
   unnest(c(city, address, location), names_repair = "unique") %>%
   # Select the required columns
-  select(name = "name...1", city = "name...10", postalCode, address = "line1", url, longitude, latitude)
+  select(name = "name...1", city = "name...10", postalCode, address = "line1", url, longitude, latitude) %>%
+    # Choose appropriate data types
+    mutate(across(c(postalCode, longitude, latitude), as.double))
 glimpse(venue_data)
 ```
 
+## Interacting with the API - advanced
+
+The maximum amount of rows retrievable from one function call is 500. Therefore,
+I choose this page size to reduce the amount of calls to API as much as 
+possible.
+
+
+```{r}
+ticketmaster_GET_all_venues = function(params = NULL, api_key){
+  ## Get the amount of total rows
+  # Make an initial API call to get the total amount
+  N_total_rows = 
+    ticketmaster_GET("venues", 
+                     c(params,
+                          "size" = 1),
+                     api_key) %>%
+  # Retrieve the content as a string
+  content(as = "text") %>%
+  # Parse the json string
+  fromJSON() %>%
+  pluck("page", "totalElements")
+  
+  ## Create a blank list to store the output
+  tmp = rep_len(NA, N_total_rows %/% 500 + 1) %>% as.list()
+  
+  ##
+  for(i in seq_len(N_total_rows %/% 500 + 1)){
+  tmp[[i]] = 
+    # Make the API call
+    ticketmaster_GET("venues", 
+                     c(params,
+                          "size" = 500,
+                          "page" = (i - 1)),
+                     api_key) %>%
+    # Retrieve the content as a string
+    content(as = "text") %>%
+    # Parse the json string
+    fromJSON() %>%
+    # Get the resulting data frame
+    pluck("_embedded", "venues") %>%
+    # Retrieve the nested coordinates
+    unnest(c(city, address, location), names_repair = "unique") %>%
+    # Select the required columns
+    select(name = "name...1", 
+           city = ifelse(any(colnames(.) == "name...9"), "name...9", "name...10"), 
+           postalCode, address = "line1", url, longitude, latitude) %>%
+    # Choose appropriate data types
+    mutate(across(c(postalCode, longitude, latitude), as.double))
+  # Enforce the 5 calls/second rate limit
+  Sys.sleep(.2)
+  }
+  return(tmp %>% rbindlist())
+}
+```
+
+```{r, message = F}
+venue_data = 
+  ticketmaster_GET_all_venues(list("countryCode" = "DE"), api_key)
+  
+glimpse(venue_data)
+```
+
+## Visualizing the extracted data
+
+```{r}
+ggplot() + 
+  geom_polygon(
+    aes(x = long, y = lat, group = group), 
+    data = map_data("world", region = "Germany"),
+    fill = "grey90", color = "black") +
+  geom_point(aes(x = longitude, y = latitude),
+             data = 
+               venue_data %>%
+               filter(!is.na(longitude) & !is.na(latitude),
+                      longitude > 5.866944 & longitude < 15.043611,
+                      latitude > 47.271679 & latitude < 55.0846)) +
+  theme_void() + 
+  coord_quickmap() +
+  labs(title = "Event locations across Germany", caption = "Source: ticketmaster.com") + 
+  theme(title = element_text(size=8, face='bold'),
+        plot.caption = element_text(face = "italic"))
+```
+
+However, I believe there is a much more comprehensive way of displaying the data.
+Since `r venue_data %>% filter(is.na(latitude) | is.na(longitude)) %>% nrow() / venue_data %>% nrow()` 
+of all venues do not have coordinates assigned to them, one should display them
+by their postal code to grasp the entirety of the data. This approach requires a 
+download of a 80MB shape file for the German counties. For future re-runs of
+this code, this section is therefore not run by default.
+
+```{r}
+library(sf)
+library(rmapshaper)
+
+correspondence = 
+  read_csv2("/Users/felixschulz/OneDrive/Dokumente/Uni/Data Science Project Management 2021-2022/Assignment 5/Data/georef-germany-postleitzahl.csv") %>%
+  summarise(postalCode = as.double(`Postleitzahl / Post code`),
+            countyCode = `Kreis code`)
+
+map = read_sf("/Users/felixschulz/OneDrive/Dokumente/Uni/Data Science Project Management 2021-2022/Assignment 5/Data/georef-germany-kreis") %>%
+  select(countyCode = krs_code) %>%
+  ms_simplify()
+
+map_dat = venue_data %>%
+  left_join(correspondence, by = "postalCode") %>%
+  group_by(countyCode) %>%
+  summarise(n_venues = n_distinct(name)) %>%
+  ungroup() %>%
+  full_join(map, by = "countyCode") %>%
+  mutate(n_venues = ifelse(is.na(n_venues), 0, n_venues)) %>%
+  st_sf()
+
+ggplot() +
+  geom_sf(aes(fill = n_venues + 1), 
+          size = .1, data = map_dat) +
+  scale_fill_viridis_c(trans = "log", 
+                       breaks = c(2, 11, 101),
+                       labels = ~ .x - 1) +
+  theme_void() +
+  labs(title = "Density of event locations across Germany", 
+       caption = "Source: ticketmaster.com",
+       fill = "Number\nof\nvenues") + 
+  theme(title = element_text(size=8, face='bold'),
+        plot.caption = element_text(face = "italic"))
+
+```
 
 
