@@ -1,0 +1,86 @@
+---
+title: 'Assignment V: GitHub and the ticketmaster.com API'
+author: "Felix Schulz"
+date: "12/26/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+rm(list = ls())
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## 1. Setting up a new GitHub repository
+
+I set up a public github repo that is accessible using the link
+[https://github.com/felixschulz385/dspm_assignment_5.git](https://github.com/felixschulz385/dspm_assignment_5.git).
+
+## 2. Getting to know the API
+
+We import the key from an external .R file for security reasons.
+
+```{r}
+source("api_key.R")
+```
+
+## 3. Interacting with the API - the basics
+
+The required packages are imported:
+
+```{r, message = F}
+# Core packages
+library(httr)
+library(jsonlite)
+library(rlist)
+# Additional packages
+library(tidyverse)
+```
+
+We also set up lists to contain API responses.
+
+```{r}
+responses = list()
+```
+
+
+Because we will make frequent calls to the API, I set up a function to wrap the
+API call and simplify my code.
+
+```{r}
+ticketmaster_GET = function(endpoint, params = NULL, api_key){
+  GET(paste0("https://app.ticketmaster.com/discovery/v2/",
+             endpoint,
+             ".json"),
+      query = c(list("apikey" = api_key),
+                params))
+}
+```
+
+The first request to the API requests data from the *venues*-endpoint.
+
+```{r}
+responses$"venues_DE" = ticketmaster_GET("venues", 
+                                         list("countryCode" = "DE"),
+                                         api_key)
+```
+
+The response is parsed.
+
+```{r}
+venue_data = 
+  responses$"venues_DE" %>%
+  # Retrieve the content as a string
+  content(as = "text") %>%
+  # Parse the json string
+  fromJSON() %>%
+  # Get the resulting data frame
+  pluck("_embedded", "venues") %>%
+  # Retrieve the nested coordinates
+  unnest(c(city, address, location), names_repair = "unique") %>%
+  # Select the required columns
+  select(name = "name...1", city = "name...10", postalCode, address = "line1", url, longitude, latitude)
+glimpse(venue_data)
+```
+
+
+
