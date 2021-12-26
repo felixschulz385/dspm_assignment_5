@@ -36,14 +36,14 @@ library(tidyverse)
 library(data.table)
 ```
 
-We also set up lists to contain API responses.
+I also set up lists to contain API responses.
 
 ```{r}
 responses = list()
 ```
 
 
-Because we will make frequent calls to the API, I set up a function to wrap the
+Because I will make frequent calls to the API, I set up a function to wrap the
 API call and simplify my code.
 
 ```{r}
@@ -84,7 +84,7 @@ venue_data =
 glimpse(venue_data)
 ```
 
-## Interacting with the API - advanced
+## 4. Interacting with the API - advanced
 
 The maximum amount of rows retrievable from one function call is 500. Therefore,
 I choose this page size to reduce the amount of calls to API as much as 
@@ -128,7 +128,7 @@ ticketmaster_GET_all_venues = function(params = NULL, api_key){
     unnest(c(city, address, location), names_repair = "unique") %>%
     # Select the required columns
     select(name = "name...1", 
-           city = ifelse(any(colnames(.) == "name...9"), "name...9", "name...10"), 
+           city = colnames(.)[str_detect(colnames(.), "name...") & colnames(.) != "name...1"], 
            postalCode, address = "line1", url, longitude, latitude) %>%
     # Choose appropriate data types
     mutate(across(c(postalCode, longitude, latitude), as.double))
@@ -146,7 +146,7 @@ venue_data =
 glimpse(venue_data)
 ```
 
-## Visualizing the extracted data
+## 5. Visualizing the extracted data
 
 ```{r}
 ggplot() + 
@@ -168,7 +168,8 @@ ggplot() +
 ```
 
 However, I believe there is a much more comprehensive way of displaying the data.
-Since `r venue_data %>% filter(is.na(latitude) | is.na(longitude)) %>% nrow() / venue_data %>% nrow()` 
+Since 
+`r venue_data %>% filter(is.na(latitude) | is.na(longitude)) %>% nrow() / venue_data %>% nrow()` 
 of all venues do not have coordinates assigned to them, one should display them
 by their postal code to grasp the entirety of the data. This approach requires a 
 download of a 80MB shape file for the German counties. For future re-runs of
@@ -208,7 +209,38 @@ ggplot() +
        fill = "Number\nof\nvenues") + 
   theme(title = element_text(size=8, face='bold'),
         plot.caption = element_text(face = "italic"))
-
 ```
 
+It turns out Bavarians either don't like ticketmaster.com or are severe couch 
+potatoes.
+
+## 6. Event locations in other countries
+
+```{r, message = F}
+venue_data_nl = 
+  ticketmaster_GET_all_venues(list("countryCode" = "NL"), api_key)
+  
+glimpse(venue_data_nl)
+```
+
+```{r}
+ggplot() + 
+  geom_polygon(
+    aes(x = long, y = lat, group = group), 
+    data = map_data("world", region = "Netherlands"),
+    fill = "grey90", color = "black") +
+  geom_point(aes(x = longitude, y = latitude),
+             data = 
+               venue_data_nl %>%
+               filter(!is.na(longitude) & !is.na(latitude),
+                      longitude > map_data("world", region = "Netherlands") %>% pull(long) %>% min() & 
+                        longitude < map_data("world", region = "Netherlands") %>% pull(long) %>% max(),
+                      latitude > map_data("world", region = "Netherlands") %>% pull(lat) %>% min() & 
+                        latitude < map_data("world", region = "Netherlands") %>% pull(lat) %>% max())) +
+  theme_void() + 
+  coord_quickmap() +
+  labs(title = "Event locations across Germany", caption = "Source: ticketmaster.com") + 
+  theme(title = element_text(size=8, face='bold'),
+        plot.caption = element_text(face = "italic"))
+```
 
