@@ -2,26 +2,37 @@
 title: 'Assignment V: GitHub and the ticketmaster.com API'
 author: "Felix Schulz"
 date: "12/26/2021"
-output: html_document
+output: 
+  html_document:
+    toc: yes
 ---
 
 ```{r setup, include=FALSE}
 rm(list = ls())
 knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_knit$set(root.dir = "/Users/felixschulz/OneDrive/Dokumente/Uni/Data Science Project Management 2021-2022/Assignment 5")
 ```
+
+I hereby declare that this work and the code is solely my work. I did not work
+as part of any group for this assignment.
 
 ## 1. Setting up a new GitHub repository
 
 I set up a public github repo that is accessible using the link
-[https://github.com/felixschulz385/dspm_assignment_5.git](https://github.com/felixschulz385/dspm_assignment_5.git).
+[https://github.com/felixschulz385/dspm_assignment_5.git](https://github.com/felixschulz385/dspm_assignment_5.git)
+and the account [https://github.com/felixschulz385](https://github.com/felixschulz385).
 
 ## 2. Getting to know the API
 
-We import the key from an external .R file for security reasons.
+I retrieve the key from the API explorer and import the key from an external .R 
+file for security reasons.
 
 ```{r}
-source("api_key.R")
+source("Code/api_key.R")
 ```
+
+There is a rate limit of five calls per second and 5000 calls per day. These 
+will be enforced by my code.
 
 ## 3. Interacting with the API - the basics
 
@@ -36,12 +47,11 @@ library(tidyverse)
 library(data.table)
 ```
 
-I also set up lists to contain API responses.
+I also set up a list to contain API responses.
 
 ```{r}
 responses = list()
 ```
-
 
 Because I will make frequent calls to the API, I set up a function to wrap the
 API call and simplify my code.
@@ -64,7 +74,7 @@ responses$"venues_DE" = ticketmaster_GET("venues",
                                          api_key)
 ```
 
-The response is parsed.
+The response is then first parsed into a list.
 
 ```{r}
 venue_data = 
@@ -72,24 +82,46 @@ venue_data =
   # Retrieve the content as a string
   content(as = "text") %>%
   # Parse the json string
-  fromJSON() %>%
+  fromJSON()
+glimpse(venue_data)
+```
+
+The resulting list contains three main elements. First, there is an embedded
+data frame of venues that is of central interest to us. The API also returns
+links for retrieving other (first, next and last) pages of the data and
+meta-information on the page and the total extent of the data.
+
+Next, the information is gathered out of the embedded data frame and appropriate
+data types are chosen.
+
+```{r}
+venue_data = 
+  venue_data %>%
   # Get the resulting data frame
   pluck("_embedded", "venues") %>%
   # Retrieve the nested coordinates
   unnest(c(city, address, location), names_repair = "unique") %>%
   # Select the required columns
-  select(name = "name...1", city = "name...10", postalCode, address = "line1", url, longitude, latitude) %>%
-    # Choose appropriate data types
-    mutate(across(c(postalCode, longitude, latitude), as.double))
+  select(name = "name...1", city = "name...10", postalCode, 
+         address = "line1", url, longitude, latitude) %>%
+  # Choose appropriate data types
+  mutate(across(c(postalCode, longitude, latitude), as.double))
 glimpse(venue_data)
 ```
 
 ## 4. Interacting with the API - advanced
 
-The maximum amount of rows retrievable from one function call is 500. Therefore,
-I choose this page size to reduce the amount of calls to API as much as 
-possible.
+All data in the *ticketmaster.com*-venues-API is accessed via pages that are
+uniquely identified by their size and index. The maximum amount of rows 
+retrievable from one function call appears to be 500. Therefore, I choose this 
+page size to reduce the amount of calls to API as much as possible. Data is then
+retrieved by looping through the page numbers until all results have been 
+returned.
 
+The following code generalizes a `for`-loop call to the API to ensure 
+applicability to other parameters. First, the total amount of rows is retrieved.
+Then, a blank list to store the output is created. Then, the loop collects the
+parsed API results. These are then combined in a data frame.
 
 ```{r}
 ticketmaster_GET_all_venues = function(params = NULL, api_key){
@@ -109,7 +141,7 @@ ticketmaster_GET_all_venues = function(params = NULL, api_key){
   ## Create a blank list to store the output
   tmp = rep_len(NA, N_total_rows %/% 500 + 1) %>% as.list()
   
-  ##
+  ## Loop over the entries of the API
   for(i in seq_len(N_total_rows %/% 500 + 1)){
   tmp[[i]] = 
     # Make the API call
@@ -128,7 +160,13 @@ ticketmaster_GET_all_venues = function(params = NULL, api_key){
     unnest(c(city, address, location), names_repair = "unique") %>%
     # Select the required columns
     select(name = "name...1", 
-           city = colnames(.)[str_detect(colnames(.), "name...") & colnames(.) != "name...1"], 
+           # For different countries, different columns are returned.
+           # The name-repair of unnest adds the column index to make
+           # the names unique. This however results in different
+           # column names for different countries. Therefore, I
+           # implement this flexible approach.
+           city = colnames(.)[str_detect(colnames(.), "name...") & 
+                                colnames(.) != "name...1"], 
            postalCode, address = "line1", url, longitude, latitude) %>%
     # Choose appropriate data types
     mutate(across(c(postalCode, longitude, latitude), as.double))
@@ -139,7 +177,11 @@ ticketmaster_GET_all_venues = function(params = NULL, api_key){
 }
 ```
 
-```{r, message = F}
+Testing this function, I call it to retrieve all German data. The resulting
+data frame turns out much smaller than the example from the assignment's 
+instructions.
+
+```{r, message = F, warning = F}
 venue_data = 
   ticketmaster_GET_all_venues(list("countryCode" = "DE"), api_key)
   
@@ -148,61 +190,131 @@ glimpse(venue_data)
 
 ## 5. Visualizing the extracted data
 
+The following code adds the venues as points to the plot. Filtering of outliers
+is done directly within creation of the plot.
+
 ```{r}
 ggplot() + 
+  # The polygons from the assignment's instructions
   geom_polygon(
     aes(x = long, y = lat, group = group), 
     data = map_data("world", region = "Germany"),
     fill = "grey90", color = "black") +
+  # The points implemented by me
   geom_point(aes(x = longitude, y = latitude),
+             # Data is filted to be inside Germany's bounding box
              data = 
                venue_data %>%
                filter(!is.na(longitude) & !is.na(latitude),
                       longitude > 5.866944 & longitude < 15.043611,
                       latitude > 47.271679 & latitude < 55.0846)) +
+  # Theme choices from the assignment's instructions
   theme_void() + 
   coord_quickmap() +
-  labs(title = "Event locations across Germany", caption = "Source: ticketmaster.com") + 
+  labs(title = "Event locations across Germany", 
+       caption = "Source: ticketmaster.com") + 
   theme(title = element_text(size=8, face='bold'),
         plot.caption = element_text(face = "italic"))
 ```
 
 However, I believe there is a much more comprehensive way of displaying the data.
 Since 
-`r venue_data %>% filter(is.na(latitude) | is.na(longitude)) %>% nrow() / venue_data %>% nrow()` 
+`r (venue_data %>% filter(is.na(latitude) | is.na(longitude)) %>% nrow() / venue_data %>% nrow()) %>% round(0) %>% "*"(100)` 
 of all venues do not have coordinates assigned to them, one should display them
-by their postal code to grasp the entirety of the data. This approach requires a 
-download of a 80MB shape file for the German counties. For future re-runs of
-this code, this section is therefore not run by default.
+by their postal code to grasp the entirety of the data. 
+
+First, I create simplified versions of openly available data that I make 
+accessible for download for replication purposes. This reduces the required
+download from 100mB to less than 400kB. For future re-runs of
+this code, the simplifying is therefore not run by default but the resulting
+data is directly downloaded.
 
 ```{r}
+# Import necessary packages
 library(sf)
+```
+
+I believe that displaying the data on the postcode level is not feasible and
+does not produce easily comprehensible results. Therefore, I aggregate the data
+on the county level. I use an open-source database retrieved from 
+[opendatasoft.com](https://public.opendatasoft.com/explore/dataset/georef-germany-postleitzahl/information/)
+to create a mapping of postcodes to counties. Since the data is licensed under
+the *Open Database License*, I am able to modify and share the data.
+
+Additionally, I acquire a map of all German counties from the same source and
+under the same license that I simplify and export.
+([opendatasoft.com](https://public.opendatasoft.com/explore/dataset/georef-germany-kreis/information/)).
+
+Both resulting files are zipped and uploaded to a cloud hosting service.
+
+```{r, eval = F}
 library(rmapshaper)
 
-correspondence = 
-  read_csv2("/Users/felixschulz/OneDrive/Dokumente/Uni/Data Science Project Management 2021-2022/Assignment 5/Data/georef-germany-postleitzahl.csv") %>%
+## Import and clean the database of German postcodes
+read_csv2("Data/georef-germany-postleitzahl.csv") %>%
+  # Select a subset of columns
   summarise(postalCode = as.double(`Postleitzahl / Post code`),
-            countyCode = `Kreis code`)
+            countyCode = `Kreis code`) %>%
+  # Export
+  write_csv("Data/correspondence_postCodes_counties.csv")
 
-map = read_sf("/Users/felixschulz/OneDrive/Dokumente/Uni/Data Science Project Management 2021-2022/Assignment 5/Data/georef-germany-kreis") %>%
+## Import and simplify the map
+if(!dir.exists("Data/map_counties_Germany")) dir.create("Data/map_counties_Germany")
+
+## Import and clean the database of German counties
+read_sf("Data/georef-germany-kreis") %>%
+  # Select a subset of columns
   select(countyCode = krs_code) %>%
-  ms_simplify()
+  # Simplify the shapes
+  ms_simplify() %>%
+  # Export
+  write_sf("Data/map_counties_Germany/map_counties_Germany.shp")
+```
 
-map_dat = venue_data %>%
-  left_join(correspondence, by = "postalCode") %>%
+The following script creates the choropleth map of the number of venues in a
+given county. The map and correspondence is first downloaded.
+
+```{r, message = F}
+## Download the files if necessary
+if(!dir.exists("Data")) dir.create("Data")
+if(!file.exists("Data/counties_Germany/counties_Germany.shp") |
+   !file.exists("Data/postCodes_counties.csv")){
+  download.file(
+    url = "https://api.onedrive.com/v1.0/shares/s!AjXuK6Vn5knCiIIp2lUjEKLsZRoCig/root/content",
+    destfile = "Data/Schulz_Felix_AssignmentV_add_Data.zip")
+  unzip("Data/Schulz_Felix_AssignmentV_add_Data.zip",
+        exdir = "Data")
+  file.remove("Data/Schulz_Felix_AssignmentV_add_Data.zip")
+}
+
+## Create a shapefile/table to plot
+map_dat = 
+  venue_data %>%
+  # Join with mapping between postcode and county
+  left_join(read_csv("Data/correspondence_postCodes_counties.csv"), 
+            by = "postalCode") %>%
+  # Aggregate number of venues by county
   group_by(countyCode) %>%
   summarise(n_venues = n_distinct(name)) %>%
   ungroup() %>%
-  full_join(map, by = "countyCode") %>%
+  # Join with map
+  full_join(read_sf("Data/map_counties_Germany"), by = "countyCode") %>%
+  # Set all missings to zero
   mutate(n_venues = ifelse(is.na(n_venues), 0, n_venues)) %>%
+  # Make a simple feature object
   st_sf()
 
+## Plot the choropleth map
 ggplot() +
+  # Plot the simple features
   geom_sf(aes(fill = n_venues + 1), 
           size = .1, data = map_dat) +
+  # Scale the color of the map by the log number of venues
+  # Make some adjustment to allow for values of zero
   scale_fill_viridis_c(trans = "log", 
                        breaks = c(2, 11, 101),
                        labels = ~ .x - 1) +
+  # Theme choices from the assignment's instructions
   theme_void() +
   labs(title = "Density of event locations across Germany", 
        caption = "Source: ticketmaster.com",
@@ -216,30 +328,51 @@ potatoes.
 
 ## 6. Event locations in other countries
 
-```{r, message = F}
+For this last task, I choose to download and plot all venues from the 
+Netherlands. Since I standardize API call before, all I have to change is the
+parameter of the *countryCode*. There are 1,017 venues listed on 
+ticketmaster.com across the Netherlands.
+
+```{r, message = F, warning = F}
 venue_data_nl = 
   ticketmaster_GET_all_venues(list("countryCode" = "NL"), api_key)
   
 glimpse(venue_data_nl)
 ```
 
+The map can also largely be reproduced using the code from above. The most
+significant change is the diversion from using a hardcoded bounding box to
+algorithmically calculating it within the `ggplot` call.
+
 ```{r}
 ggplot() + 
+  # The polygons from the assignment's instructions
   geom_polygon(
     aes(x = long, y = lat, group = group), 
     data = map_data("world", region = "Netherlands"),
     fill = "grey90", color = "black") +
+  # The points implemented by me
   geom_point(aes(x = longitude, y = latitude),
              data = 
                venue_data_nl %>%
                filter(!is.na(longitude) & !is.na(latitude),
-                      longitude > map_data("world", region = "Netherlands") %>% pull(long) %>% min() & 
-                        longitude < map_data("world", region = "Netherlands") %>% pull(long) %>% max(),
-                      latitude > map_data("world", region = "Netherlands") %>% pull(lat) %>% min() & 
-                        latitude < map_data("world", region = "Netherlands") %>% pull(lat) %>% max())) +
+                      longitude > 
+                        map_data("world", region = "Netherlands") %>% 
+                        pull(long) %>% min(), 
+                      longitude < 
+                        map_data("world", region = "Netherlands") %>% 
+                        pull(long) %>% max(),
+                      latitude > 
+                        map_data("world", region = "Netherlands") %>% 
+                        pull(lat) %>% min(), 
+                      latitude < 
+                        map_data("world", region = "Netherlands") %>% 
+                        pull(lat) %>% max())) +
+  # Theme choices from the assignment's instructions
   theme_void() + 
   coord_quickmap() +
-  labs(title = "Event locations across Germany", caption = "Source: ticketmaster.com") + 
+  labs(title = "Event locations across the Netherlands", 
+       caption = "Source: ticketmaster.com") + 
   theme(title = element_text(size=8, face='bold'),
         plot.caption = element_text(face = "italic"))
 ```
