@@ -13,8 +13,8 @@ knitr::opts_chunk$set(echo = TRUE)
 knitr::opts_knit$set(root.dir = "/Users/felixschulz/OneDrive/Dokumente/Uni/Data Science Project Management 2021-2022/Assignment 5")
 ```
 
-I hereby declare that this work and the code is solely my work. I did not work
-as part of any group for this assignment.
+I hereby declare that this work and the code is solely my work. I exchanged 
+ideas with fellow student Marvin Hoberg for this assignment.
 
 ## 1. Setting up a new GitHub repository
 
@@ -45,6 +45,7 @@ library(jsonlite)
 # Additional packages
 library(tidyverse)
 library(data.table)
+library(janitor)
 ```
 
 I also set up a list to contain API responses.
@@ -70,8 +71,8 @@ The first request to the API requests data from the *venues*-endpoint.
 
 ```{r}
 responses$"venues_DE" = ticketmaster_GET("venues", 
-                                         list("countryCode" = "DE"),
-                                         api_key)
+                                         params = list("countryCode" = "DE"),
+                                         api_key = api_key)
 ```
 
 The response is then first parsed into a list.
@@ -177,13 +178,41 @@ ticketmaster_GET_all_venues = function(params = NULL, api_key){
 }
 ```
 
-Testing this function, I call it to retrieve all German data. The resulting
-data frame turns out much smaller than the example from the assignment's 
-instructions.
+Testing this function, I call it to retrieve all German data. I include results 
+from all locales -- not just the English ones -- to replicate the size of the 
+table from the assignment's instructions. Further, I check for duplicates and 
+remove them heuristically. 
+
+```{r}
+ticketmaster_remove_dupe_venues = function(x){
+  x %>%
+    # Get the duplicate elements
+    get_dupes(., c("name", "city", "address")) %>%
+    # Select sorting categories
+    group_by(name, city, address) %>%
+    # Flag any where there is long and lat information available for one or
+    # more entries
+    mutate(flag_1 = any(!is.na(longitude) & !is.na(latitude))) %>%
+    # Sort out those that miss long and lat information for one or more dupes
+    filter(flag_1 & !is.na(longitude) & !is.na(latitude) |
+             !flag_1) %>%
+    select(-flag_1) %>%
+    # Choose the first duplicate for each group
+    slice_head(n = 1) %>%
+    ungroup() %>%
+    # Remove the dupes from the data
+    anti_join(x %>% get_dupes(., c("name", "city", "address")),
+              .) %>%
+    anti_join(x, .)
+}
+```
 
 ```{r, message = F, warning = F}
+# Run the query
 venue_data = 
-  ticketmaster_GET_all_venues(list("countryCode" = "DE"), api_key)
+  ticketmaster_GET_all_venues(list("countryCode" = "DE",
+                                   locale = "*"), api_key) %>%
+  ticketmaster_remove_dupe_venues()
   
 glimpse(venue_data)
 ```
@@ -207,7 +236,8 @@ ggplot() +
                venue_data %>%
                filter(!is.na(longitude) & !is.na(latitude),
                       longitude > 5.866944 & longitude < 15.043611,
-                      latitude > 47.271679 & latitude < 55.0846)) +
+                      latitude > 47.271679 & latitude < 55.0846),
+             alpha = .5) +
   # Theme choices from the assignment's instructions
   theme_void() + 
   coord_quickmap() +
@@ -219,50 +249,70 @@ ggplot() +
 
 However, I believe there is a much more comprehensive way of displaying the data.
 Since 
-`r (venue_data %>% filter(is.na(latitude) | is.na(longitude)) %>% nrow() / venue_data %>% nrow()) %>% round(0) %>% "*"(100)` 
+`r (venue_data %>% filter(is.na(latitude) | is.na(longitude)) %>% nrow() / venue_data %>% nrow()) %>% round(2) %>% "*"(100)`% 
 of all venues do not have coordinates assigned to them, one should display them
-by their postal code to grasp the entirety of the data. 
+by their postal code which is available in 
+`r (venue_data %>% filter(!is.na(postalCode)) %>% nrow() / venue_data %>% nrow()) %>% round(2) %>% "*"(100)`%
+of cases in order to grasp the entirety of the data.
 
-First, I create simplified versions of openly available data that I make 
-accessible for download for replication purposes. This reduces the required
-download from 100mB to less than 400kB. For future re-runs of
-this code, the simplifying is therefore not run by default but the resulting
-data is directly downloaded.
-
-```{r}
-# Import necessary packages
-library(sf)
-```
-
-I believe that displaying the data on the postcode level is not feasible and
-does not produce easily comprehensible results. Therefore, I aggregate the data
-on the county level. I use an open-source database retrieved from 
-[opendatasoft.com](https://public.opendatasoft.com/explore/dataset/georef-germany-postleitzahl/information/)
+However, I believe that displaying the data on the postcode level is not 
+feasible and does not produce easily comprehensible results. Therefore, I 
+aggregate the data on the county level. I use an open-source database retrieved
+from [opendatasoft.com](https://public.opendatasoft.com/explore/dataset/georef-germany-postleitzahl/information/)
 to create a mapping of postcodes to counties. Since the data is licensed under
-the *Open Database License*, I am able to modify and share the data.
+the *Open Database License*, I am allowed to modify and share the data.
 
-Additionally, I acquire a map of all German counties from the same source and
-under the same license that I simplify and export.
-([opendatasoft.com](https://public.opendatasoft.com/explore/dataset/georef-germany-kreis/information/)).
-
-Both resulting files are zipped and uploaded to a cloud hosting service.
+Since the original file is 100MB large, I create simplified versions that I make 
+accessible for download for replication purposes. This reduces the required
+download from 100MB to less than 400KB. For future re-runs of this code, this 
+step is therefore not run by default but the resulting table is downloaded 
+instead.
 
 ```{r, eval = F}
-library(rmapshaper)
+if(!dir.exists("Data")) dir.create("Data")
+if(!file.exists("Data/georef-germany-postleitzahl.csv")){
+  download.file(
+    url = "https://public.opendatasoft.com/explore/dataset/georef-germany-postleitzahl/download/?format=csv&timezone=Europe/Berlin&lang=en&use_labels_for_header=true&csv_separator=%3B",
+    destfile = "Data/georef-germany-postleitzahl.csv")
+}
 
-## Import and clean the database of German postcodes
+  ## Import and clean the database of German postcodes
 read_csv2("Data/georef-germany-postleitzahl.csv") %>%
   # Select a subset of columns
   summarise(postalCode = as.double(`Postleitzahl / Post code`),
             countyCode = `Kreis code`) %>%
   # Export
   write_csv("Data/correspondence_postCodes_counties.csv")
+```
+
+Additionally, I acquire a map of all German counties from the same source and
+under the same license that I simplify and export.
+([opendatasoft.com](https://public.opendatasoft.com/explore/dataset/georef-germany-kreis/information/)).
+
+Both resulting files are then zipped and uploaded to a cloud hosting service.
+
+```{r}
+# Import necessary packages
+library(sf)
+```
+
+```{r, eval = F}
+# Import necessary packages
+library(rmapshaper)
 
 ## Import and simplify the map
+if(!dir.exists("Data")) dir.create("Data")
 if(!dir.exists("Data/map_counties_Germany")) dir.create("Data/map_counties_Germany")
-
+if(!dir.exists("Data/georef-germany-kreis")){
+  download.file(
+    url = "https://public.opendatasoft.com/explore/dataset/georef-germany-kreis/download/?format=shp&timezone=Europe/Berlin&lang=en",
+    destfile = "Data/georef-germany-kreis.zip")
+  unzip("Data/georef-germany-kreis.zip",
+        exdir = "Data/georef-germany-kreis")
+  file.remove("Data/georef-germany-kreis.zip")
+}
 ## Import and clean the database of German counties
-read_sf("Data/georef-germany-kreis") %>%
+read_sf("Data/georef-germany-kreis/georef-germany-kreis-millesime.shp") %>%
   # Select a subset of columns
   select(countyCode = krs_code) %>%
   # Simplify the shapes
@@ -330,17 +380,19 @@ potatoes.
 
 For this last task, I choose to download and plot all venues from the 
 Netherlands. Since I standardize API call before, all I have to change is the
-parameter of the *countryCode*. There are 1,017 venues listed on 
+parameter of the *countryCode*. There are 2,073 venues listed on 
 ticketmaster.com across the Netherlands.
 
 ```{r, message = F, warning = F}
 venue_data_nl = 
-  ticketmaster_GET_all_venues(list("countryCode" = "NL"), api_key)
+  ticketmaster_GET_all_venues(list("countryCode" = "NL",
+                                   "locale" = "*"), api_key) %>%
+  ticketmaster_remove_dupe_venues()
   
 glimpse(venue_data_nl)
 ```
 
-The map can also largely be reproduced using the code from above. The most
+The map can also largely be reproduced using the code from above. The only
 significant change is the diversion from using a hardcoded bounding box to
 algorithmically calculating it within the `ggplot` call.
 
