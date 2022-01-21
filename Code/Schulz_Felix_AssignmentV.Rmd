@@ -181,7 +181,7 @@ ticketmaster_GET_all_venues = function(params = NULL, api_key){
 Testing this function, I call it to retrieve all German data. I include results 
 from all locales -- not just the English ones -- to replicate the size of the 
 table from the assignment's instructions. Further, I check for duplicates and 
-remove them heuristically. 
+remove them heuristically.
 
 ```{r}
 ticketmaster_remove_dupe_venues = function(x){
